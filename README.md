@@ -8,6 +8,10 @@ An interactive, AI-powered conversation analysis platform that extracts historic
 2. **`ai-data-analyzer.py`**: A Python backend script that parses the CSV data, batches messages per user/interaction, utilizes the Gemini API to construct behavioral personas and relationship dynamics, and caches the result into `analytics_cache.json`.
 3. **`index.html`**: A modern web frontend that renders interactive visual analytics, graphs, and network interactions directly from the cached data.
 
+## 📸 Demo
+
+![Dashboard Screenshot](screenshot-demo.png)
+
 ---
 
 ## 🛠️ Setup and Installation
