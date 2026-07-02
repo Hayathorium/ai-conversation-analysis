@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Conversation Analyzer</title>
+
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --void: #0d1117;
+  --panel: #141a22;
+  --panel-raised: #1a222c;
+  --hairline: #263140;
+  --teal: #35e6c5;
+  --violet: #9b83ff;
+  --amber: #ffb454;
+  --rose: #ff6b8b;
+  --text: #dce6f0;
+  --text-dim: #6d7f92;
+  --text-faint: #48566a;
+  --mono: 'Space Mono', monospace;
+  --sans: 'Inter', sans-serif;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{ background:var(--void); color:var(--text); font-family:var(--sans); height:100%; }
+body{ min-height:100vh; position:relative; }
+::selection{ background:var(--teal); color:#02110d; }
+::-webkit-scrollbar{ width:8px; height:8px; }
+::-webkit-scrollbar-track{ background:var(--panel); }
+::-webkit-scrollbar-thumb{ background:var(--hairline); border-radius:4px; }
+
+/* ---------- 3D ambient background ---------- */
+#bgCanvas{
+  position:fixed; inset:0; z-index:0; pointer-events:none;
+  opacity:0.55;
+}
+
+/* ---------- layout shell ---------- */
+.shell{ position:relative; z-index:1; display:flex; flex-direction:column; min-height:100vh; }
+
+/* ---------- top bar ---------- */
+.topbar{
+  border-bottom:1px solid var(--hairline);
+  background:linear-gradient(180deg, rgba(20,26,34,0.92), rgba(20,26,34,0.72));
+  backdrop-filter:blur(6px);
+  position:sticky; top:0; z-index:40;
+}
+.topbar-inner{ display:flex; align-items:center; justify-content:space-between; padding:14px 24px; gap:20px; flex-wrap:wrap; }
+.brand{ display:flex; align-items:center; gap:12px; }
+.brand-mark{ width:34px; height:34px; border-radius:8px; background:conic-gradient(from 180deg, var(--teal), var(--violet), var(--teal)); position:relative; flex-shrink:0; animation:spin 8s linear infinite; }
+.brand-mark::after{ content:''; position:absolute; inset:4px; border-radius:5px; background:var(--void); }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+.brand-text .t1{ font-family:var(--mono); font-weight:700; font-size:14px; }
+.brand-text .t2{ font-size:11px; color:var(--text-dim); letter-spacing:0.04em; }
+
+.server-badge{
+  display:flex; align-items:center; gap:10px;
+  border:1px solid var(--hairline); background:var(--panel-raised);
+  padding:6px 14px; border-radius:8px;
+}
+.server-badge .name{ font-family:var(--mono); font-size:12px; font-weight:700; color:var(--text); }
+.server-badge .count{ font-family:var(--mono); font-size:11px; color:var(--teal); border-left:1px solid var(--hairline); padding-left:10px; }
+
+.status-pill{ display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px; color:var(--teal); border:1px solid rgba(53,230,197,0.3); background:rgba(53,230,197,0.06); padding:5px 10px; border-radius:20px; }
+.status-dot{ width:6px; height:6px; border-radius:50%; background:var(--teal); box-shadow:0 0 8px var(--teal); animation:pulse 1.8s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+.status-pill.warn{ color:var(--amber); border-color:rgba(255,180,84,0.35); background:rgba(255,180,84,0.06); }
+.status-pill.warn .status-dot{ background:var(--amber); box-shadow:0 0 8px var(--amber); }
+
+.file-controls{ display:flex; gap:8px; align-items:center; }
+.file-btn{ font-family:var(--mono); font-size:11px; color:var(--text-dim); border:1px dashed var(--hairline); padding:6px 10px; border-radius:6px; cursor:pointer; transition:all .15s ease; background:transparent; }
+.file-btn:hover{ color:var(--teal); border-color:var(--teal); }
+.file-btn.loaded{ color:var(--teal); border-color:var(--teal); border-style:solid; background:rgba(53,230,197,0.06); }
+input[type=file]{ display:none; }
+
+/* ---------- tab nav ---------- */
+.tabnav{
+  display:flex; gap:2px; padding:0 24px; border-bottom:1px solid var(--hairline);
+  background:rgba(13,17,23,0.6); overflow-x:auto;
+}
+.tab-btn{
+  font-family:var(--mono); font-size:12px; letter-spacing:0.04em; color:var(--text-dim);
+  background:transparent; border:none; padding:12px 18px; cursor:pointer;
+  border-bottom:2px solid transparent; white-space:nowrap; transition:color .15s ease;
+}
+.tab-btn:hover{ color:var(--text); }
+.tab-btn.active{ color:var(--teal); border-bottom-color:var(--teal); }
+
+/* ---------- tab panels ---------- */
+.tab-content{ flex:1; padding:20px 24px 40px; }
+.tab-panel{ display:none; animation:fadein .2s ease; }
+.tab-panel.active{ display:block; }
+@keyframes fadein{ from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
+
+/* ---------- generic cards / grids ---------- */
+.card-row{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px,1fr)); gap:12px; margin-bottom:16px; }
+.stat-card{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:16px 18px; }
+.stat-card .label{ font-family:var(--mono); font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-faint); margin-bottom:6px; }
+.stat-card .value{ font-family:var(--mono); font-size:24px; font-weight:700; }
+.stat-card .value.teal{ color:var(--teal); } .stat-card .value.violet{ color:var(--violet); } .stat-card .value.amber{ color:var(--amber); }
+.stat-card .sub{ font-size:10.5px; color:var(--text-dim); margin-top:4px; }
+
+.panel{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; display:flex; flex-direction:column; min-height:0; margin-bottom:16px; }
+.panel-header{ padding:14px 18px; border-bottom:1px solid var(--hairline); display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.panel-title{ font-family:var(--mono); font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-dim); }
+.panel-body{ padding:16px 18px; }
+.two-col{ display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }
+.three-col{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
+@media (max-width:1000px){ .two-col, .three-col{ grid-template-columns:1fr; } }
+.chart-holder{ height:240px; position:relative; }
+.chart-holder.tall{ height:320px; }
+.chart-holder.short{ height:180px; }
+
+select, .seg-btn{
+  font-family:var(--mono); font-size:11px; color:var(--text);
+  background:var(--panel-raised); border:1px solid var(--hairline); border-radius:6px;
+  padding:6px 10px; outline:none; cursor:pointer;
+}
+select:focus{ border-color:var(--teal); }
+.seg-group{ display:flex; gap:0; border:1px solid var(--hairline); border-radius:6px; overflow:hidden; }
+.seg-btn{ border:none; border-radius:0; background:var(--panel-raised); color:var(--text-dim); }
+.seg-btn.active{ background:rgba(53,230,197,0.12); color:var(--teal); }
+.seg-btn + .seg-btn{ border-left:1px solid var(--hairline); }
+
+/* ---------- leaderboards ---------- */
+.leader-row{ display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px dashed var(--hairline); }
+.leader-row:last-child{ border-bottom:none; }
+.leader-rank{ font-family:var(--mono); font-size:11px; color:var(--text-faint); width:20px; flex-shrink:0; }
+.avatar{ width:28px; height:28px; border-radius:50%; object-fit:cover; flex-shrink:0; border:1px solid var(--hairline); background:var(--panel-raised); }
+.avatar-lg{ width:64px; height:64px; border-radius:50%; object-fit:cover; border:2px solid var(--teal); box-shadow:0 0 16px rgba(53,230,197,0.35); flex-shrink:0; }
+.leader-name{ font-size:12px; font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.leader-bar-track{ flex:1; height:5px; background:var(--hairline); border-radius:3px; overflow:hidden; max-width:110px; }
+.leader-bar-fill{ height:100%; background:linear-gradient(90deg, var(--teal), var(--violet)); }
+.leader-count{ font-family:var(--mono); font-size:10.5px; color:var(--text-dim); width:56px; text-align:right; flex-shrink:0; }
+
+/* ---------- channel bar list ---------- */
+.hbar-row{ display:flex; align-items:center; gap:10px; padding:6px 0; }
+.hbar-label{ font-family:var(--mono); font-size:10.5px; color:var(--text-dim); width:100px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hbar-track{ flex:1; height:8px; background:var(--hairline); border-radius:4px; overflow:hidden; }
+.hbar-fill{ height:100%; }
+.hbar-val{ font-family:var(--mono); font-size:10px; color:var(--text-faint); width:44px; text-align:right; flex-shrink:0; }
+
+/* ---------- roster / users tab ---------- */
+.users-grid{ display:grid; grid-template-columns:260px 1fr; gap:16px; }
+@media (max-width:1000px){ .users-grid{ grid-template-columns:1fr; } }
+.roster-search{ width:100%; background:var(--panel-raised); border:1px solid var(--hairline); color:var(--text); font-size:12px; padding:8px 10px; border-radius:6px; outline:none; margin-bottom:10px; }
+.roster-search:focus{ border-color:var(--teal); }
+.roster-item{ display:flex; align-items:center; gap:10px; padding:8px; border-radius:8px; cursor:pointer; transition:background .12s ease; border:1px solid transparent; }
+.roster-item:hover{ background:var(--panel-raised); }
+.roster-item.active{ background:rgba(53,230,197,0.08); border-color:rgba(53,230,197,0.35); }
+.roster-name{ font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.roster-archetype{ font-size:10.5px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.roster-count{ margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--text-faint); }
+
+.dossier-head{ display:flex; gap:14px; align-items:center; }
+.dossier-name{ font-weight:700; font-size:17px; }
+.dossier-rank{ font-family:var(--mono); font-size:10px; color:var(--amber); }
+.dossier-archetype{ font-family:var(--mono); font-size:11px; color:var(--teal); margin-top:2px; }
+.dossier-id{ font-family:var(--mono); font-size:10px; color:var(--text-faint); margin-top:2px; }
+.tag{ display:inline-block; font-size:10.5px; font-family:var(--mono); border:1px solid var(--hairline); color:var(--text-dim); padding:3px 8px; border-radius:20px; margin:0 5px 5px 0; }
+.tag.topic{ border-color:rgba(155,131,255,0.35); color:var(--violet); }
+.section-label{ font-family:var(--mono); font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-faint); margin:14px 0 6px; }
+.dossier-summary{ font-size:12.5px; line-height:1.6; }
+.empty-state{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:50px 20px; color:var(--text-dim); text-align:center; }
+.empty-state .glyph{ font-family:var(--mono); font-size:26px; color:var(--teal); opacity:0.7; }
+.empty-state .hint{ font-size:12px; max-width:360px; }
+
+.graph-dossier-layout{
+    display:grid;
+    grid-template-columns: 2fr 1fr;
+    gap:18px;
+    align-items:start;
+}
+.graph-dossier-layout > .panel{
+    height:620px;
+}
+
+.graph-dossier-layout #dossierBody{
+    overflow-y:auto;
+    height:calc(100% - 54px); /* subtract header height */
+}
+
+/* ---------- graph ---------- */
+.graph-wrap{ position:relative; height:700px; }
+#cy{ position:absolute; inset:0; }
+.legend{ position:absolute; bottom:10px; left:10px; display:flex; gap:14px; font-family:var(--mono); font-size:10px; color:var(--text-dim); background:rgba(13,17,23,0.7); padding:6px 10px; border-radius:6px; border:1px solid var(--hairline); }
+.legend-swatch{ display:inline-block; width:10px; height:2px; margin-right:5px; vertical-align:middle; }
+.overlay{ position:absolute; top:10px; right:10px; width:250px; background:var(--panel-raised); border:1px solid var(--hairline); border-radius:10px; padding:14px; box-shadow:0 8px 30px rgba(0,0,0,0.5); display:none; z-index:5; }
+.overlay.show{ display:block; }
+.overlay-close{ position:absolute; top:8px; right:10px; cursor:pointer; color:var(--text-faint); font-size:14px; }
+.overlay-close:hover{ color:var(--rose); }
+.vibe-bar{ height:4px; border-radius:2px; background:var(--hairline); overflow:hidden; margin-top:6px; }
+.vibe-fill{ height:100%; background:linear-gradient(90deg, var(--rose), var(--amber), var(--teal)); }
+
+/* ---------- time tab: calendar heatmap ---------- */
+.year-select-row{ display:flex; align-items:center; gap:10px; }
+.calendar-wrap{ overflow-x:auto; padding-bottom:6px; }
+.calendar-grid{ display:grid; grid-auto-flow:column; grid-template-rows:repeat(7, 12px); gap:3px; }
+.cal-cell{ width:12px; height:12px; border-radius:2px; background:var(--panel-raised); }
+.cal-month-labels{ display:flex; font-family:var(--mono); font-size:9px; color:var(--text-faint); margin-bottom:4px; gap:0; }
+
+.heatmap-grid{ display:grid; grid-template-columns:28px 1fr; gap:4px; align-items:center; }
+.heatmap{ display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; }
+.heat-cell{ aspect-ratio:1; border-radius:2px; background:var(--panel-raised); }
+.heat-row-label{ font-family:var(--mono); font-size:9px; color:var(--text-faint); padding-right:4px; }
+
+/* ---------- words tab ---------- */
+.word-ledger{ display:flex; flex-direction:column; gap:0; }
+.word-ledger-row{ display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px dashed var(--hairline); font-size:12px; }
+.word-ledger-row .rank{ font-family:var(--mono); color:var(--text-faint); width:22px; }
+.word-ledger-row .word{ flex:1; font-weight:600; }
+.word-ledger-row .count{ font-family:var(--mono); color:var(--teal); font-size:11px; }
+.emoji-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(70px,1fr)); gap:10px; }
+.emoji-cell{ text-align:center; background:var(--panel-raised); border:1px solid var(--hairline); border-radius:8px; padding:10px 6px; }
+.emoji-cell .glyph{ font-size:22px; }
+.emoji-cell .count{ font-family:var(--mono); font-size:10px; color:var(--text-dim); margin-top:4px; }
+.word-cloud{ display:flex; flex-wrap:wrap; gap:8px 14px; align-items:baseline; padding:10px 4px; }
+.cloud-word{ font-family:var(--mono); font-weight:700; cursor:default; transition:opacity .15s ease, transform .15s ease; line-height:1; }
+.cloud-word:hover{ opacity:0.75; transform:scale(1.06); }
+
+footer{ padding:14px 24px; border-top:1px solid var(--hairline); font-family:var(--mono); font-size:10px; color:var(--text-faint); display:flex; justify-content:space-between; position:relative; z-index:1; }
+</style>
+</head>
+<body>
+<canvas id="bgCanvas"></canvas>
+
+<div class="shell">
+
+  <!-- ============ TOP BAR ============ -->
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div class="brand-text">
+          <div class="t1">Discord</div>
+          <div class="t2">Conversation Analyzer</div>
+        </div>
+      </div>
+
+      <div class="server-badge">
+        <span class="name" id="serverName">NO SERVER LOADED</span>
+        <span class="count" id="serverCount">0 msgs</span>
+      </div>
+
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot"></span>
+        <span id="statusText">INITIALIZING…</span>
+      </div>
+
+      <div class="file-controls">
+        <label class="file-btn" id="csvBtn">
+          ⤓ discord_messages.csv
+          <input type="file" id="csvInput" accept=".csv" />
+        </label>
+        <label class="file-btn" id="jsonBtn">
+          ⤓ analytics_cache.json
+          <input type="file" id="jsonInput" accept=".json" />
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ TAB NAV ============ -->
+  <nav class="tabnav">
+    <button class="tab-btn active" data-tab="users">Users</button>
+    <button class="tab-btn" data-tab="overview">Overview</button>
+    <button class="tab-btn" data-tab="channels">Channels</button>
+    <button class="tab-btn" data-tab="words">Words</button>
+  </nav>
+
+  <div class="tab-content">
+
+    <!-- ======================================================
+         OVERVIEW TAB
+    ======================================================= -->
+    <section class="tab-panel" id="tab-overview">
+      <div class="card-row">
+        <div class="stat-card"><div class="label">Total Messages</div><div class="value teal" id="ovTotalMsgs">—</div><div class="sub">parsed log rows</div></div>
+        <div class="stat-card"><div class="label">Total Days Active</div><div class="value" id="ovDaysActive">—</div><div class="sub">first → last log span</div></div>
+        <div class="stat-card"><div class="label">Avg Messages / Day</div><div class="value violet" id="ovAvgDay">—</div><div class="sub">mean daily velocity</div></div>
+        <div class="stat-card"><div class="label">Active Users</div><div class="value amber" id="ovActiveUsers">—</div><div class="sub">unique senders</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Message Volume Trend</span>
+          <div class="seg-group" id="volInterval">
+            <button class="seg-btn active" data-interval="day">Day</button>
+            <button class="seg-btn" data-interval="week">Week</button>
+            <button class="seg-btn" data-interval="month">Month</button>
+          </div>
+        </div>
+        <div class="panel-body chart-holder tall"><canvas id="volumeChart"></canvas></div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Messages Distribution Split</span></div>
+          <div class="panel-body chart-holder short"><canvas id="distChart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Top Channels</span></div>
+          <div class="panel-body" id="topChannelsList"><div class="empty-state"><div class="hint">No data loaded.</div></div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Top Users Leaderboard</span></div>
+        <div class="panel-body" id="topUsersList"><div class="empty-state"><div class="hint">No data loaded.</div></div></div>
+      </div>
+    </section>
+
+    <!-- ======================================================
+         CHANNELS TAB
+    ======================================================= -->
+    <section class="tab-panel" id="tab-channels">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Channel Selection</span>
+          <select id="channelSelect"><option>— no channels —</option></select>
+        </div>
+        <div class="panel-body">
+          <div class="card-row" id="channelMeta"></div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Daily Message Frequency</span></div>
+          <div class="panel-body chart-holder"><canvas id="channelDailyChart"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Chatter Share</span></div>
+          <div class="panel-body chart-holder"><canvas id="channelPieChart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Hourly Activity Map</span></div>
+        <div class="panel-body chart-holder"><canvas id="channelHourlyChart"></canvas></div>
+      </div>
+    </section>
+
+    <!-- ======================================================
+         USERS TAB
+    ======================================================= -->
+    <section class="tab-panel active" id="tab-users">
+      <div class="users-grid">
+        <div class="panel" style="margin-bottom:0;">
+          <div class="panel-header"><span class="panel-title">User List</span><span class="panel-title" id="rosterCount">0</span></div>
+          <div class="panel-body">
+            <input class="roster-search" id="rosterSearch" placeholder="filter users…" />
+            <div id="rosterList"></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="graph-dossier-layout">
+          <div class="panel">
+            <div class="panel-header">
+              <span class="panel-title">Interaction Graph</span>
+              <span class="panel-title" id="graphHint">click a node or edge</span>
+            </div>
+            <button id="resetGraphBtn" class="file-btn" style="border-style: solid; padding: 4px 8px; font-size: 10px;">
+              ⟲ RESET VIEW
+            </button>
+            <div class="graph-wrap">
+              <div id="cy"></div>
+              <div id="graphEmpty" class="empty-state" style="position:absolute; inset:0;">
+                <div class="glyph">◈ ◈ ◈</div>
+                <div class="hint">Load discord_messages.csv and analytics_cache.json to render the interaction network.</div>
+              </div>
+              <div class="legend" id="graphLegend" style="display:none;">
+                <span><span class="legend-swatch" style="background:var(--teal);"></span>high vibe</span>
+                <span><span class="legend-swatch" style="background:var(--amber);"></span>mid vibe</span>
+                <span><span class="legend-swatch" style="background:var(--rose);"></span>low vibe</span>
+              </div>
+              <div class="overlay" id="edgeOverlay">
+                <span class="overlay-close" id="edgeClose">✕</span>
+                <div class="section-label">Relationship Report</div>
+                <div id="edgePair" style="font-weight:700; font-size:13px;"></div>
+                <div id="edgeType" style="font-family:var(--mono); font-size:11px; color:var(--violet); margin-top:2px;"></div>
+                <div style="display:flex; justify-content:space-between; margin-top:10px;">
+                  <span style="font-size:10.5px; color:var(--text-dim);">vibe score</span>
+                  <span id="edgeVibeNum" style="font-family:var(--mono); font-size:11px;"></span>
+                </div>
+                <div class="vibe-bar"><div class="vibe-fill" id="edgeVibeBar" style="width:0%;"></div></div>
+                <div class="dossier-summary" style="margin-top:10px;" id="edgeSummary"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header"><span class="panel-title">User Information</span></div>
+            <div class="panel-body" id="dossierBody">
+              <div class="empty-state"><div class="glyph">◈</div><div class="hint">Select a user from the list or graph to open their profile.</div></div>
+            </div>
+          </div>
+          </div>
+
+          <div class="card-row" id="userActivityCards"></div>
+
+          <div class="two-col">
+            <div class="panel">
+              <div class="panel-header"><span class="panel-title">Activity Timeline</span></div>
+              <div class="panel-body chart-holder short"><canvas id="userTimelineChart"></canvas></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header"><span class="panel-title">Hourly Habits</span></div>
+              <div class="panel-body chart-holder short"><canvas id="userHourlyChart"></canvas></div>
+            </div>
+          </div>
+
+          <div class="two-col">
+            <div class="panel">
+              <div class="panel-header"><span class="panel-title">Day-of-Week Distribution</span></div>
+              <div class="panel-body chart-holder short"><canvas id="userDowChart"></canvas></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header"><span class="panel-title">Channel Preference</span></div>
+              <div class="panel-body" id="userChannelPref" style="min-height:180px;"></div>
+            </div>
+          </div>
+
+          
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================
+         TIME TAB
+    ======================================================= -->
+    <section class="tab-panel" id="tab-time">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Global Activity Grid</span>
+          <div class="year-select-row">
+            <span class="panel-title">Year</span>
+            <select id="yearSelect"><option>—</option></select>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="cal-month-labels" id="calMonthLabels"></div>
+          <div class="calendar-wrap"><div class="calendar-grid" id="calendarGrid"></div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Global Hourly / Weekly Aggregator Matrix</span></div>
+        <div class="panel-body" id="globalHeatmapBody">
+          <div class="empty-state"><div class="hint">No temporal data yet.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================
+         WORDS TAB
+    ======================================================= -->
+    <section class="tab-panel" id="tab-words">
+      <div class="card-row">
+        <div class="stat-card"><div class="label">Total Words Processed</div><div class="value teal" id="wTotalWords">—</div></div>
+        <div class="stat-card"><div class="label">Unique Vocabulary</div><div class="value violet" id="wUniqueWords">—</div></div>
+        <div class="stat-card"><div class="label">Avg Word Length</div><div class="value amber" id="wAvgLen">—</div><div class="sub">characters per word</div></div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Top Words</span></div>
+          <div class="panel-body word-ledger" id="topWordsLedger"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Top Emojis</span></div>
+          <div class="panel-body emoji-grid" id="topEmojiGrid"><div class="empty-state"><div class="hint">No emoji data yet.</div></div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">Message Length Distribution</span></div>
+        <div class="panel-body chart-holder"><canvas id="wordCountChart"></canvas></div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    <span>Documentation: <a href="https://github.com/Hayathorium/ai-conversation-analysis" style="color: rgb(255, 255, 255);">https://github.com/Hayathorium/ai-conversation-analysis</a></span>
+  </footer>
+</div>
+
+<script>
+/* =========================================================================
+   CONFIG
+========================================================================= */
+const STOPWORDS = new Set(("a about above after again against all am an and any are aren't as at be "+
+"because been before being below between both but by can't cannot could couldn't did didn't do does "+
+"doesn't doing don't down during each few for from further had hadn't has hasn't have haven't having "+
+"he he'd he'll he's her here here's hers herself him himself his how how's i i'd i'll i'm i've if in into "+
+"is isn't it it's its itself let's me more most mustn't my myself no nor not of off on once only or other "+
+"ought our ours ourselves out over own same shan't she she'd she'll she's should shouldn't so some such than "+
+"that that's the their theirs them themselves then there there's these they they'd they'll they're they've "+
+"this those through to too under until up very was wasn't we we'd we'll we're we've were weren't what what's "+
+"when when's where where's which while who who's whom why why's with won't would wouldn't you you'd you'll "+
+"you're you've your yours yourself yourselves just like get got im its really thats gonna wanna").split(' '));
+
+const EMOJI_RE = /(\p{Extended_Pictographic})/gu;
+const WORD_RE = /[a-zA-Z']{2,}/g;
+const URL_RE = /https?:\/\/\S+/i;
+
+/* =========================================================================
+   STATE
+========================================================================= */
+const state = {
+  messages: [],
+  cache: null,
+  personas: {},
+  agentsById: {},
+  edges: [],
+  cy: null,
+  charts: {},
+  activeTab: 'users',
+  selectedUser: null,
+  selectedChannel: null,
+  selectedYear: null,
+  volInterval: 'day',
+};
+
+const $ = (id) => document.getElementById(id);
+
+/* =========================================================================
+   FILE LOADING — auto-load on startup, manual upload as fallback
+========================================================================= */
+$('csvInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  Papa.parse(file, { header:true, skipEmptyLines:true, complete:(res) => {
+    state.messages = res.data;
+    markLoaded('csvBtn', file.name);
+    onDataChanged();
+  }});
+});
+
+$('jsonInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      state.cache = JSON.parse(ev.target.result);
+      markLoaded('jsonBtn', file.name);
+      onDataChanged();
+    } catch (err) { alert('Could not parse analytics_cache.json: ' + err.message); }
+  };
+  reader.readAsText(file);
+});
+
+function markLoaded(btnId, label) {
+  const btn = $(btnId);
+  btn.classList.add('loaded');
+  btn.firstChild.textContent = '✓ ' + label + ' ';
+}
+
+async function autoLoad() {
+  setStatus('SYNCING DATA…', 'warn');
+  const [csvOk, jsonOk] = await Promise.all([autoLoadCsv(), autoLoadJson()]);
+  onDataChanged();
+  if (csvOk && jsonOk) setStatus('DATA SYNCED', 'ok');
+  else if (csvOk || jsonOk) setStatus('PARTIAL DATA · UPLOAD THE MISSING FILE', 'warn');
+  else setStatus('NO LOCAL SERVER DETECTED · UPLOAD FILES MANUALLY', 'warn');
+}
+
+async function autoLoadCsv() {
+  try {
+    const res = await fetch('discord_messages.csv', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const text = await res.text();
+    const parsed = Papa.parse(text, { header:true, skipEmptyLines:true });
+    state.messages = parsed.data;
+    markLoaded('csvBtn', 'discord_messages.csv');
+    return true;
+  } catch (e) { return false; }
+}
+
+async function autoLoadJson() {
+  try {
+    const res = await fetch('analytics_cache.json', { cache: 'no-store' });
+    if (!res.ok) return false;
+    state.cache = await res.json();
+    markLoaded('jsonBtn', 'analytics_cache.json');
+    return true;
+  } catch (e) { return false; }
+}
+
+function setStatus(text, mode) {
+  const pill = $('statusPill');
+  $('statusText').textContent = text;
+  pill.classList.toggle('warn', mode === 'warn');
+}
+
+/* =========================================================================
+   TAB SWITCHING
+========================================================================= */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $('tab-' + btn.dataset.tab).classList.add('active');
+    state.activeTab = btn.dataset.tab;
+    renderActiveTab();
+  });
+});
+
+function renderActiveTab() {
+  switch (state.activeTab) {
+    case 'overview': renderOverview(); break;
+    case 'channels': renderChannelsTab(); break;
+    case 'users': renderUsersTab(); break;
+    case 'time': renderTimeTab(); break;
+    case 'words': renderWordsTab(); break;
+  }
+}
+
+/* =========================================================================
+   DATA WIRING
+========================================================================= */
+function onDataChanged() {
+  const hasCsv = state.messages && state.messages.length > 0;
+  const hasCache = !!state.cache;
+  if (hasCache) state.personas = state.cache.personas || {};
+
+  state.agentsById = {};
+  if (hasCsv) {
+    for (const row of state.messages) {
+      const uid = row['User ID'];
+      if (!uid) continue;
+      state.agentsById[uid] = { display_name: row['Display Name'] || uid, avatar_url: row['Avatar URL'] || '' };
+    }
+  }
+  if (hasCache) {
+    for (const [uid, p] of Object.entries(state.personas)) {
+      state.agentsById[uid] = {
+        display_name: p.username || state.agentsById[uid]?.display_name || uid,
+        avatar_url: p.avatar_url || state.agentsById[uid]?.avatar_url || '',
+      };
+    }
+  }
+  state.edges = hasCache ? (state.cache.interactions || []) : [];
+
+  if (hasCsv) {
+    const server = state.messages[0]['Server'] || '—';
+    $('serverName').textContent = server;
+    $('serverCount').textContent = state.messages.length.toLocaleString() + ' msgs';
+  }
+
+  populateChannelSelect();
+  populateYearSelect();
+
+  renderActiveTab();
+}
+
+/* =========================================================================
+   UTIL
+========================================================================= */
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmt(n) { return (n === undefined || n === null || isNaN(n)) ? '—' : Math.round(n * 10) / 10; }
+function parseTs(row) { const d = new Date(row['Timestamp']); return isNaN(d) ? null : d; }
+function destroyChart(id) { if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; } }
+function chartAxisStyle() { return { ticks:{ color:'#6d7f92', font:{ size:9, family:'Space Mono' } }, grid:{ color:'#263140' } }; }
+function vibeColor(score) { if (score >= 7) return '#35e6c5'; if (score >= 4) return '#ffb454'; return '#ff6b8b'; }
+function dayDiff(a, b) { return Math.max(1, Math.round((b - a) / 86400000) + 1); }
+
+function getTimestampBounds() {
+  let min = null, max = null;
+  for (const m of state.messages) {
+    const d = parseTs(m);
+    if (!d) continue;
+    if (!min || d < min) min = d;
+    if (!max || d > max) max = d;
+  }
+  return { min, max };
+}
+
+/* =========================================================================
+   OVERVIEW TAB
+========================================================================= */
+function renderOverview() {
+  const msgs = state.messages;
+  const hasCsv = msgs && msgs.length > 0;
+
+  if (!hasCsv) {
+    $('ovTotalMsgs').textContent = '—'; $('ovDaysActive').textContent = '—';
+    $('ovAvgDay').textContent = '—'; $('ovActiveUsers').textContent = '—';
+    destroyChart('volumeChart'); destroyChart('distChart');
+    $('topChannelsList').innerHTML = '<div class="empty-state"><div class="hint">No data loaded.</div></div>';
+    $('topUsersList').innerHTML = '<div class="empty-state"><div class="hint">No data loaded.</div></div>';
+    return;
+  }
+
+  const { min, max } = getTimestampBounds();
+  const days = (min && max) ? dayDiff(min, max) : 1;
+  const activeUsers = new Set(msgs.map(m => m['User ID']).filter(Boolean));
+
+  $('ovTotalMsgs').textContent = msgs.length.toLocaleString();
+  $('ovDaysActive').textContent = days.toLocaleString();
+  $('ovAvgDay').textContent = fmt(msgs.length / days);
+  $('ovActiveUsers').textContent = activeUsers.size.toLocaleString();
+
+  renderVolumeChart();
+  renderDistChart();
+  renderTopChannels();
+  renderTopUsers();
+}
+
+document.querySelectorAll('#volInterval .seg-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#volInterval .seg-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.volInterval = btn.dataset.interval;
+    renderVolumeChart();
+  });
+});
+
+function bucketKey(date, interval) {
+  if (interval === 'day') return date.toISOString().slice(0, 10);
+  if (interval === 'week') {
+    const d = new Date(date); const day = (d.getUTCDay() + 6) % 7;
+    d.setUTCDate(d.getUTCDate() - day);
+    return d.toISOString().slice(0, 10);
+  }
+  return date.toISOString().slice(0, 7);
+}
+
+function renderVolumeChart() {
+  destroyChart('volumeChart');
+  if (!state.messages.length) return;
+  const buckets = {};
+  for (const m of state.messages) {
+    const d = parseTs(m); if (!d) continue;
+    const key = bucketKey(d, state.volInterval);
+    buckets[key] = (buckets[key] || 0) + 1;
+  }
+  const labels = Object.keys(buckets).sort();
+  const data = labels.map(l => buckets[l]);
+  state.charts['volumeChart'] = new Chart($('volumeChart'), {
+    type: 'line',
+    data: { labels, datasets: [{ data, borderColor:'#35e6c5', backgroundColor:'rgba(53,230,197,0.12)', pointRadius:0, borderWidth:2, fill:true, tension:0.35 }] },
+    options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false } }, scales:{ x:chartAxisStyle(), y:chartAxisStyle() } },
+  });
+}
+
+function classifyMessage(m) {
+  if ((m['Attachments'] || '').trim() !== '') return 'media';
+  if (URL_RE.test(m['Content'] || '')) return 'link';
+  return 'text';
+}
+
+function renderDistChart() {
+  destroyChart('distChart');
+  if (!state.messages.length) return;
+  let text = 0, media = 0, link = 0;
+  for (const m of state.messages) {
+    const c = classifyMessage(m);
+    if (c === 'media') media++; else if (c === 'link') link++; else text++;
+  }
+  state.charts['distChart'] = new Chart($('distChart'), {
+    type: 'bar',
+    data: { labels: ['Text', 'Media Attachments', 'Web Links'], datasets: [{ data:[text, media, link], backgroundColor:['#35e6c5','#9b83ff','#ffb454'], borderRadius:4 }] },
+    options: { indexAxis: 'y', responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false } }, scales:{ x:chartAxisStyle(), y:chartAxisStyle() } },
+  });
+}
+
+function renderTopChannels() {
+  const counts = {};
+  for (const m of state.messages) { const c = m['Channel']; if (c) counts[c] = (counts[c]||0)+1; }
+  const ranked = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const max = ranked.length ? ranked[0][1] : 1;
+  const colors = ['#35e6c5','#9b83ff','#ffb454','#ff6b8b'];
+  $('topChannelsList').innerHTML = ranked.map(([name,count], i) => `
+    <div class="hbar-row">
+      <div class="hbar-label">#${escapeHtml(name)}</div>
+      <div class="hbar-track"><div class="hbar-fill" style="width:${(count/max*100).toFixed(1)}%; background:${colors[i%colors.length]};"></div></div>
+      <div class="hbar-val">${count}</div>
+    </div>`).join('') || '<div class="empty-state"><div class="hint">No channels found.</div></div>';
+}
+
+function renderTopUsers() {
+  const counts = {};
+  for (const m of state.messages) { const u = m['User ID']; if (u) counts[u] = (counts[u]||0)+1; }
+  const total = state.messages.length;
+  const ranked = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  const max = ranked.length ? ranked[0][1] : 1;
+  $('topUsersList').innerHTML = ranked.map(([uid,count], i) => {
+    const agent = state.agentsById[uid] || { display_name: uid, avatar_url:'' };
+    const pct = ((count/total)*100).toFixed(1);
+    return `<div class="leader-row">
+      <div class="leader-rank">#${i+1}</div>
+      <img class="avatar" src="${escapeHtml(agent.avatar_url)}" onerror="this.style.visibility='hidden'" />
+      <div class="leader-name">${escapeHtml(agent.display_name)}</div>
+      <div class="leader-bar-track"><div class="leader-bar-fill" style="width:${(count/max*100).toFixed(1)}%;"></div></div>
+      <div class="leader-count">${pct}% · ${count}</div>
+    </div>`;
+  }).join('') || '<div class="empty-state"><div class="hint">No users found.</div></div>';
+}
+
+/* =========================================================================
+   CHANNELS TAB
+========================================================================= */
+function populateChannelSelect() {
+  const sel = $('channelSelect');
+  const channels = [...new Set(state.messages.map(m => m['Channel']).filter(Boolean))].sort();
+  sel.innerHTML = channels.length ? channels.map(c => `<option value="${escapeHtml(c)}">#${escapeHtml(c)}</option>`).join('') : '<option>— no channels —</option>';
+  if (channels.length) state.selectedChannel = state.selectedChannel && channels.includes(state.selectedChannel) ? state.selectedChannel : channels[0];
+  sel.value = state.selectedChannel || '';
+}
+$('channelSelect').addEventListener('change', (e) => { state.selectedChannel = e.target.value; renderChannelsTab(); });
+
+function renderChannelsTab() {
+  const channel = state.selectedChannel;
+  destroyChart('channelDailyChart'); destroyChart('channelPieChart'); destroyChart('channelHourlyChart');
+  if (!channel || !state.messages.length) {
+    $('channelMeta').innerHTML = '<div class="empty-state"><div class="hint">No channel data loaded.</div></div>';
+    return;
+  }
+  const rows = state.messages.filter(m => m['Channel'] === channel);
+  const timestamps = rows.map(parseTs).filter(Boolean);
+  const min = timestamps.length ? new Date(Math.min(...timestamps)) : null;
+  const max = timestamps.length ? new Date(Math.max(...timestamps)) : null;
+  const days = (min && max) ? dayDiff(min, max) : 1;
+  const chatters = new Set(rows.map(r => r['User ID']).filter(Boolean));
+  const attachments = rows.filter(r => (r['Attachments']||'').trim() !== '').length;
+
+  $('channelMeta').innerHTML = `
+    <div class="stat-card"><div class="label">Messages</div><div class="value teal">${rows.length.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Duration Tracked</div><div class="value">${days}d</div></div>
+    <div class="stat-card"><div class="label">Active Chatters</div><div class="value violet">${chatters.size}</div></div>
+    <div class="stat-card"><div class="label">Attachments</div><div class="value amber">${attachments}</div></div>
+  `;
+
+  const byDay = {};
+  for (const r of rows) { const d = parseTs(r); if (!d) continue; const k = d.toISOString().slice(0,10); byDay[k]=(byDay[k]||0)+1; }
+  const dayLabels = Object.keys(byDay).sort();
+  state.charts['channelDailyChart'] = new Chart($('channelDailyChart'), {
+    type:'bar',
+    data:{ labels:dayLabels, datasets:[{ data:dayLabels.map(d=>byDay[d]), backgroundColor:'#35e6c5', borderRadius:3 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:chartAxisStyle(), y:chartAxisStyle()} },
+  });
+
+  const byUser = {};
+  for (const r of rows) { const u = r['User ID']; if (u) byUser[u]=(byUser[u]||0)+1; }
+  const rankedUsers = Object.entries(byUser).sort((a,b)=>b[1]-a[1]);
+  const top = rankedUsers.slice(0,6);
+  const others = rankedUsers.slice(6).reduce((s,[,c])=>s+c,0);
+  const pieLabels = top.map(([uid])=> state.agentsById[uid]?.display_name || uid);
+  const pieData = top.map(([,c])=>c);
+  if (others > 0) { pieLabels.push('Others'); pieData.push(others); }
+  state.charts['channelPieChart'] = new Chart($('channelPieChart'), {
+    type:'doughnut',
+    data:{ labels:pieLabels, datasets:[{ data:pieData, backgroundColor:['#35e6c5','#9b83ff','#ffb454','#ff6b8b','#5cc8ff','#c792ea','#48566a'] }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right', labels:{ color:'#dce6f0', font:{ size:10 } } } } },
+  });
+
+  const hourly = Array(24).fill(0);
+  for (const r of rows) { const d = parseTs(r); if (d) hourly[d.getUTCHours()]++; }
+  state.charts['channelHourlyChart'] = new Chart($('channelHourlyChart'), {
+    type:'line',
+    data:{ labels:Array.from({length:24},(_,i)=>i+':00'), datasets:[{ data:hourly, borderColor:'#ffb454', backgroundColor:'rgba(255,180,84,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:chartAxisStyle(), y:chartAxisStyle()} },
+  });
+}
+
+/* =========================================================================
+   USERS TAB
+========================================================================= */
+function renderUsersTab() {
+  renderRoster();
+  if (state.selectedUser && state.agentsById[state.selectedUser]) {
+    selectAgent(state.selectedUser, true);
+  }
+  renderGraph();
+}
+
+function renderRoster(filter = '') {
+  const list = $('rosterList');
+  list.innerHTML = '';
+  const entries = Object.entries(state.agentsById).filter(([uid,a]) => a.display_name.toLowerCase().includes(filter.toLowerCase()));
+  $('rosterCount').textContent = entries.length;
+  if (!entries.length) { list.innerHTML = '<div class="empty-state"><div class="hint">No users loaded yet.</div></div>'; return; }
+
+  const counts = {};
+  for (const m of state.messages) { const u = m['User ID']; if (u) counts[u]=(counts[u]||0)+1; }
+  entries.sort((a,b) => (counts[b[0]]||0) - (counts[a[0]]||0));
+
+  for (const [uid, agent] of entries) {
+    const persona = state.personas[uid];
+    const el = document.createElement('div');
+    el.className = 'roster-item' + (uid === state.selectedUser ? ' active' : '');
+    el.dataset.uid = uid;
+    el.innerHTML = `
+      <img class="avatar" src="${escapeHtml(agent.avatar_url)}" onerror="this.style.visibility='hidden'" />
+      <div style="min-width:0;">
+        <div class="roster-name">${escapeHtml(agent.display_name)}</div>
+        <div class="roster-archetype">${escapeHtml(persona?.archetype || 'unclassified')}</div>
+      </div>
+      <div class="roster-count">${counts[uid] || ''}</div>
+    `;
+    el.addEventListener('click', () => selectAgent(uid));
+    list.appendChild(el);
+  }
+}
+$('rosterSearch').addEventListener('input', (e) => renderRoster(e.target.value));
+
+function selectAgent(uid, skipRosterHighlight) {
+  state.selectedUser = uid;
+  hideOverlays();
+
+  if (!skipRosterHighlight) {
+    document.querySelectorAll('.roster-item').forEach(el => el.classList.toggle('active', el.dataset.uid === uid));
+  }
+  if (state.cy) {
+    state.cy.elements().unselect();
+    const n = state.cy.getElementById(uid);
+    if (n) n.select();
+  }
+
+  const agent = state.agentsById[uid];
+  const persona = state.personas[uid];
+  const body = $('dossierBody');
+  if (!agent) { body.innerHTML = '<div class="empty-state"><div class="hint">User not found.</div></div>'; return; }
+
+  const userMsgs = state.messages.filter(m => m['User ID'] === uid);
+  const counts = {};
+  for (const m of state.messages) { const u = m['User ID']; if (u) counts[u]=(counts[u]||0)+1; }
+  const ranked = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  const rank = ranked.findIndex(([u]) => u === uid) + 1;
+
+  body.innerHTML = `
+    <div class="dossier-head">
+      <img class="avatar-lg" src="${escapeHtml(agent.avatar_url)}" onerror="this.style.visibility='hidden'" />
+      <div>
+        <div class="dossier-name">${escapeHtml(agent.display_name)}</div>
+        <div class="dossier-rank">RANK #${rank || '—'}</div>
+        <div class="dossier-archetype">${escapeHtml(persona?.archetype || 'Unclassified user')}</div>
+        <div class="dossier-id">${escapeHtml(uid)}</div>
+      </div>
+    </div>
+    ${persona ? `
+      <div class="section-label">Behavioral Summary</div>
+      <div class="dossier-summary">${escapeHtml(persona.summary || '')}</div>
+      <div class="section-label">Key Traits</div>
+      <div>${(persona.key_traits||[]).map(t=>`<span class="tag">${escapeHtml(t)}</span>`).join('') || '<span style="color:var(--text-faint); font-size:11px;">none logged</span>'}</div>
+      <div class="section-label">Frequent Topics</div>
+      <div>${(persona.frequent_topics||[]).map(t=>`<span class="tag topic">${escapeHtml(t)}</span>`).join('') || '<span style="color:var(--text-faint); font-size:11px;">none logged</span>'}</div>
+    ` : `<div class="dossier-summary" style="color:var(--text-faint); margin-top:12px;">No user information found in analytics_cache.json for this agent yet.</div>`}
+  `;
+
+  const timestamps = userMsgs.map(parseTs).filter(Boolean);
+  const min = timestamps.length ? new Date(Math.min(...timestamps)) : null;
+  const max = timestamps.length ? new Date(Math.max(...timestamps)) : null;
+  const days = (min && max) ? dayDiff(min, max) : 1;
+  const media = userMsgs.filter(m => (m['Attachments']||'').trim() !== '').length;
+
+  $('userActivityCards').innerHTML = `
+    <div class="stat-card"><div class="label">Total Messages</div><div class="value teal">${userMsgs.length.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="label">Days Active</div><div class="value">${days}</div></div>
+    <div class="stat-card"><div class="label">Daily Velocity</div><div class="value violet">${fmt(userMsgs.length/days)}</div></div>
+    <div class="stat-card"><div class="label">Media Sent</div><div class="value amber">${media}</div></div>
+  `;
+
+  destroyChart('userTimelineChart');
+  const byMonth = {};
+  for (const m of userMsgs) { const d = parseTs(m); if (!d) continue; const k = d.toISOString().slice(0,7); byMonth[k]=(byMonth[k]||0)+1; }
+  const monthLabels = Object.keys(byMonth).sort();
+  state.charts['userTimelineChart'] = new Chart($('userTimelineChart'), {
+    type:'line',
+    data:{ labels:monthLabels, datasets:[{ data:monthLabels.map(k=>byMonth[k]), borderColor:'#35e6c5', backgroundColor:'rgba(53,230,197,0.12)', fill:true, tension:0.3, pointRadius:2, borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:chartAxisStyle(), y:chartAxisStyle()} },
+  });
+
+  destroyChart('userHourlyChart');
+  const hourly = Array(24).fill(0);
+  for (const m of userMsgs) { const d = parseTs(m); if (d) hourly[d.getUTCHours()]++; }
+  state.charts['userHourlyChart'] = new Chart($('userHourlyChart'), {
+    type:'line',
+    data:{ labels:Array.from({length:24},(_,i)=>i+':00'), datasets:[{ data:hourly, borderColor:'#9b83ff', backgroundColor:'rgba(155,131,255,0.12)', fill:true, tension:0.3, pointRadius:0, borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:chartAxisStyle(), y:chartAxisStyle()} },
+  });
+
+  destroyChart('userDowChart');
+  const dow = Array(7).fill(0);
+  for (const m of userMsgs) { const d = parseTs(m); if (d) dow[(d.getUTCDay()+6)%7]++; }
+  state.charts['userDowChart'] = new Chart($('userDowChart'), {
+    type:'bar',
+    data:{ labels:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'], datasets:[{ data:dow, backgroundColor:'#ffb454', borderRadius:3 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:chartAxisStyle(), y:chartAxisStyle()} },
+  });
+
+  const byChannel = {};
+  for (const m of userMsgs) { const c = m['Channel']; if (c) byChannel[c]=(byChannel[c]||0)+1; }
+  const rankedCh = Object.entries(byChannel).sort((a,b)=>b[1]-a[1]);
+  const maxCh = rankedCh.length ? rankedCh[0][1] : 1;
+  $('userChannelPref').innerHTML = rankedCh.map(([name,count]) => `
+    <div class="hbar-row">
+      <div class="hbar-label">#${escapeHtml(name)}</div>
+      <div class="hbar-track"><div class="hbar-fill" style="width:${(count/maxCh*100).toFixed(1)}%; background:#35e6c5;"></div></div>
+      <div class="hbar-val">${count}</div>
+    </div>`).join('') || '<div class="empty-state"><div class="hint">No channel activity.</div></div>';
+}
+
+function renderGraph() {
+  const hasData = Object.keys(state.agentsById).length > 0 && state.edges.length > 0;
+  $('graphEmpty').style.display = hasData ? 'none' : 'flex';
+  $('graphLegend').style.display = hasData ? 'flex' : 'none';
+  if (!hasData) { if (state.cy) { state.cy.destroy(); state.cy = null; } return; }
+
+  const nodeIds = new Set();
+  state.edges.forEach(e => e.user_ids.forEach(id => nodeIds.add(id)));
+  const nodes = [...nodeIds].map(uid => ({ data:{ id:uid, label: state.agentsById[uid]?.display_name || uid, avatar: state.agentsById[uid]?.avatar_url || '' } }));
+  const maxWeight = Math.max(...state.edges.map(e => e.weight || 1), 1);
+  const edges = state.edges.map((e,i) => ({ data:{
+    id:'e'+i, source:e.user_ids[0], target:e.user_ids[1], weight:e.weight||1, vibe:e.vibe_score,
+    relType:e.relationship_type, summary:e.dynamic_summary,
+    width: 1 + 7*((e.weight||1)/maxWeight), color: vibeColor(Number(e.vibe_score)||5),
+  }}));
+
+  if (state.cy) state.cy.destroy();
+  state.cy = cytoscape({
+    container: $('cy'),
+    elements: [...nodes, ...edges],
+    style: [
+      { selector:'node', style:{ 'background-color':'#1a222c','background-image':'data(avatar)','background-fit':'cover','border-width':2,'border-color':'#35e6c5','width':44,'height':44,'label':'data(label)','color':'#dce6f0','font-size':9,'font-family':'Space Mono, monospace','text-valign':'bottom','text-margin-y':6 } },
+      { selector:'edge', style:{ 'width':'data(width)','line-color':'data(color)','opacity':0.55,'curve-style':'bezier','target-arrow-shape':'none' } },
+      { selector:'node:selected', style:{ 'border-color':'#9b83ff','border-width':3 } },
+      { selector:'edge:selected', style:{ 'opacity':1,'width':6 } },
+    ],
+    layout: { name:'cose', animate:true, padding:30, nodeRepulsion: function(node) {
+  const degree = node.degree();
+  return 2000 + Math.pow(2, degree) * 20;
+}, idealEdgeLength: edge => {
+    const w = edge.data('weight');
+    return Math.min(w, 500);
+}},
+  });
+  state.cy.on('tap', 'node', (evt) => selectAgent(evt.target.id()));
+  state.cy.on('tap', 'edge', (evt) => showEdgeOverlay(evt.target.data()));
+  state.cy.on('tap', (evt) => { if (evt.target === state.cy) hideOverlays(); });
+}
+
+function showEdgeOverlay(d) {
+  const nameA = state.agentsById[d.source]?.display_name || d.source;
+  const nameB = state.agentsById[d.target]?.display_name || d.target;
+  $('edgePair').textContent = `${nameA} ⇄ ${nameB}`;
+  $('edgeType').textContent = d.relType || '—';
+  const vibe = Number(d.vibe) || 0;
+  $('edgeVibeNum').textContent = vibe.toFixed(1) + ' / 10';
+  $('edgeVibeBar').style.width = Math.min(100, vibe*10) + '%';
+  $('edgeSummary').textContent = d.summary || 'No dynamic summary available.';
+  $('edgeOverlay').classList.add('show');
+}
+$('edgeClose').addEventListener('click', hideOverlays);
+function hideOverlays() { $('edgeOverlay').classList.remove('show'); }
+
+$('resetGraphBtn').addEventListener('click', () => {
+  if (state.cy) {
+    state.cy.animate({
+      fit: {
+        padding: 30 // sets a 30px boundary frame cushion around the node cluster
+      },
+      duration: 400, // smoothly glides back over 400 milliseconds
+      easing: 'ease-out-cubic' // clean aesthetic slowdown curve
+    });
+  }
+});
+
+/* =========================================================================
+   TIME TAB
+========================================================================= */
+function populateYearSelect() {
+  const sel = $('yearSelect');
+  const years = [...new Set(state.messages.map(m => { const d = parseTs(m); return d ? d.getUTCFullYear() : null; }).filter(Boolean))].sort();
+  sel.innerHTML = years.length ? years.map(y => `<option value="${y}">${y}</option>`).join('') : '<option>—</option>';
+  if (years.length) state.selectedYear = years.includes(state.selectedYear) ? state.selectedYear : years[years.length-1];
+  sel.value = state.selectedYear || '';
+}
+$('yearSelect').addEventListener('change', (e) => { state.selectedYear = parseInt(e.target.value,10); renderTimeTab(); });
+
+function renderTimeTab() {
+  renderCalendarHeatmap();
+  renderGlobalHeatmap();
+}
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function renderCalendarHeatmap() {
+  const grid = $('calendarGrid');
+  const labels = $('calMonthLabels');
+  if (!state.messages.length || !state.selectedYear) { grid.innerHTML = ''; labels.innerHTML = ''; return; }
+
+  const year = state.selectedYear;
+  const counts = {};
+  for (const m of state.messages) {
+    const d = parseTs(m); if (!d || d.getUTCFullYear() !== year) continue;
+    const k = d.toISOString().slice(0,10);
+    counts[k] = (counts[k]||0) + 1;
+  }
+  const max = Math.max(...Object.values(counts), 1);
+
+  const start = new Date(Date.UTC(year,0,1));
+  const startPad = (start.getUTCDay() + 6) % 7;
+  const end = new Date(Date.UTC(year,11,31));
+  const totalDays = Math.round((end - start)/86400000) + 1;
+
+  let html = '';
+  let monthLabelHtml = '';
+  let lastMonth = -1;
+  for (let i = -startPad; i < totalDays; i++) {
+    if (i < 0) { html += '<div class="cal-cell" style="background:transparent;"></div>'; continue; }
+    const d = new Date(Date.UTC(year,0,1+i));
+    const k = d.toISOString().slice(0,10);
+    const v = counts[k] || 0;
+    const intensity = v / max;
+    const bg = v === 0 ? 'rgba(38,49,64,0.5)' : `rgba(53,230,197,${0.15 + intensity*0.75})`;
+    html += `<div class="cal-cell" title="${k} — ${v} msgs" style="background:${bg};"></div>`;
+    if (d.getUTCDay() === 1 && d.getUTCMonth() !== lastMonth) {
+      lastMonth = d.getUTCMonth();
+      monthLabelHtml += `<span style="width:15px;">${MONTH_NAMES[lastMonth]}</span>`;
+    }
+  }
+  grid.style.gridTemplateColumns = `repeat(${Math.ceil((totalDays+startPad)/7)}, 12px)`;
+  grid.innerHTML = html;
+  labels.innerHTML = monthLabelHtml;
+}
+
+function renderGlobalHeatmap() {
+  const holder = $('globalHeatmapBody');
+  if (!state.messages.length) { holder.innerHTML = '<div class="empty-state"><div class="hint">No temporal data yet.</div></div>'; return; }
+  const grid = Array.from({length:7}, () => Array(24).fill(0));
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  for (const m of state.messages) {
+    const d = parseTs(m); if (!d) continue;
+    grid[d.getUTCDay()][d.getUTCHours()]++;
+  }
+  const max = Math.max(...grid.flat(), 1);
+  let html = '<div class="heatmap-grid">';
+  for (let day=0; day<7; day++) {
+    html += `<div class="heat-row-label">${dayNames[day]}</div><div class="heatmap">`;
+    for (let hour=0; hour<24; hour++) {
+      const v = grid[day][hour]; const intensity = v/max;
+      const bg = v === 0 ? 'rgba(38,49,64,0.4)' : `rgba(53,230,197,${0.12 + intensity*0.75})`;
+      html += `<div class="heat-cell" title="${dayNames[day]} ${hour}:00 — ${v} msgs" style="background:${bg};"></div>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  holder.innerHTML = html;
+}
+
+/* =========================================================================
+   WORDS TAB
+========================================================================= */
+function renderWordsTab() {
+  destroyChart('wordCountChart');
+  if (!state.messages.length) {
+    $('wTotalWords').textContent='—'; $('wUniqueWords').textContent='—'; $('wAvgLen').textContent='—';
+    $('topWordsLedger').innerHTML = '<div class="empty-state"><div class="hint">No data loaded.</div></div>';
+    $('topEmojiGrid').innerHTML = '<div class="empty-state"><div class="hint">No data loaded.</div></div>';
+    $('wordCloud').innerHTML = '';
+    return;
+  }
+
+  const wordCounts = {};
+  const emojiCounts = {};
+  let totalWords = 0, totalChars = 0;
+  const lengthBuckets = {};
+
+  for (const m of state.messages) {
+    const content = m['Content'] || '';
+    const words = (content.match(WORD_RE) || []).map(w => w.toLowerCase());
+    const msgWordCount = words.length;
+    const bucket =
+    msgWordCount <= 5   ? '1-5'    :
+    msgWordCount <= 10  ? '6-10'   :
+    msgWordCount <= 15  ? '11-15'  :
+    msgWordCount <= 20  ? '16-20'  :
+    msgWordCount <= 25  ? '21-25'  :
+    msgWordCount <= 30  ? '26-30'  :
+    msgWordCount <= 35  ? '31-35'  :
+    msgWordCount <= 40  ? '36-40'  :
+    msgWordCount <= 45  ? '41-45'  :
+    msgWordCount <= 50  ? '46-50'  :
+    msgWordCount <= 55  ? '51-55'  :
+    msgWordCount <= 60  ? '56-60'  :
+    msgWordCount <= 65  ? '61-65'  :
+    msgWordCount <= 70  ? '66-70'  :
+    msgWordCount <= 75  ? '71-75'  :
+    msgWordCount <= 80  ? '76-80'  :
+    msgWordCount <= 85  ? '81-85'  :
+    msgWordCount <= 90  ? '86-90'  :
+    msgWordCount <= 95  ? '91-95'  :
+    msgWordCount <= 100 ? '96-100' :
+    '101+';
+    lengthBuckets[bucket] = (lengthBuckets[bucket]||0) + 1;
+
+    for (const w of words) {
+      if (STOPWORDS.has(w)) continue;
+      wordCounts[w] = (wordCounts[w]||0) + 1;
+      totalWords++; totalChars += w.length;
+    }
+    const emojis = content.match(EMOJI_RE) || [];
+    for (const e of emojis) emojiCounts[e] = (emojiCounts[e]||0) + 1;
+  }
+
+  $('wTotalWords').textContent = totalWords.toLocaleString();
+  $('wUniqueWords').textContent = Object.keys(wordCounts).length.toLocaleString();
+  $('wAvgLen').textContent = totalWords ? (totalChars/totalWords).toFixed(1) : '—';
+
+  const topWords = Object.entries(wordCounts).sort((a,b)=>b[1]-a[1]).slice(0,20);
+  $('topWordsLedger').innerHTML = topWords.map(([w,c],i) => `
+    <div class="word-ledger-row"><span class="rank">#${i+1}</span><span class="word">${escapeHtml(w)}</span><span class="count">${c}</span></div>
+  `).join('') || '<div class="empty-state"><div class="hint">No words found.</div></div>';
+
+  const topEmojis = Object.entries(emojiCounts).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  $('topEmojiGrid').innerHTML = topEmojis.map(([e,c]) => `
+    <div class="emoji-cell"><div class="glyph">${e}</div><div class="count">${c}</div></div>
+  `).join('') || '<div class="empty-state"><div class="hint">No emojis found in this transcript.</div></div>';
+
+  const bucketOrder = [
+  '1-5',
+  '6-10',
+  '11-15',
+  '16-20',
+  '21-25',
+  '26-30',
+  '31-35',
+  '36-40',
+  '41-45',
+  '46-50',
+  '51-55',
+  '56-60',
+  '61-65',
+  '66-70',
+  '71-75',
+  '76-80',
+  '81-85',
+  '86-90',
+  '91-95',
+  '96-100',
+  '101+'
+];
+  state.charts['wordCountChart'] = new Chart($('wordCountChart'), {
+    type:'bar',
+    data:{ labels: bucketOrder.map(b=>b+' words'), datasets:[{ data: bucketOrder.map(b=>lengthBuckets[b]||0), backgroundColor:'#9b83ff', borderRadius:4 }] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:chartAxisStyle(), y:chartAxisStyle()} },
+  });
+
+  const cloudWords = topWords.slice(0,30);
+  const maxC = cloudWords.length ? cloudWords[0][1] : 1;
+  const minC = cloudWords.length ? cloudWords[cloudWords.length-1][1] : 1;
+  const colors = ['#35e6c5','#9b83ff','#ffb454','#ff6b8b','#5cc8ff'];
+  $('wordCloud').innerHTML = cloudWords.map(([w,c],i) => {
+    const t = maxC === minC ? 1 : (c - minC) / (maxC - minC);
+    const size = 12 + t * 28;
+    return `<span class="cloud-word" title="${c} occurrences" style="font-size:${size.toFixed(0)}px; color:${colors[i%colors.length]};">${escapeHtml(w)}</span>`;
+  }).join('');
+}
+
+/* =========================================================================
+   3D AMBIENT BACKGROUND (Three.js)
+========================================================================= */
+function initBackground() {
+  const canvas = $('bgCanvas');
+  if (!window.THREE || !canvas) return;
+
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha:true, antialias:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 1000);
+  camera.position.z = 60;
+
+  const group = new THREE.Group();
+  scene.add(group);
+
+  const COUNT = 160;
+  const positions = new Float32Array(COUNT*3);
+  const phases = new Float32Array(COUNT);
+  for (let i=0; i<COUNT; i++) {
+    positions[i*3] = (Math.random()-0.5) * 140;
+    positions[i*3+1] = (Math.random()-0.5) * 90;
+    positions[i*3+2] = (Math.random()-0.5) * 80;
+    phases[i] = Math.random() * Math.PI * 2;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const material = new THREE.PointsMaterial({ color:0x35e6c5, size:1.4, transparent:true, opacity:0.65 });
+  const points = new THREE.Points(geometry, material);
+  group.add(points);
+
+  const linePositions = [];
+  const threshold = 18;
+  for (let i=0; i<COUNT; i++) {
+    for (let j=i+1; j<COUNT; j++) {
+      const dx = positions[i*3]-positions[j*3], dy = positions[i*3+1]-positions[j*3+1], dz = positions[i*3+2]-positions[j*3+2];
+      const dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
+      if (dist < threshold) {
+        linePositions.push(positions[i*3],positions[i*3+1],positions[i*3+2], positions[j*3],positions[j*3+1],positions[j*3+2]);
+      }
+    }
+  }
+  const lineGeom = new THREE.BufferGeometry();
+  lineGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(linePositions), 3));
+  const lineMat = new THREE.LineBasicMaterial({ color:0x5b6fff, transparent:true, opacity:0.12 });
+  const lines = new THREE.LineSegments(lineGeom, lineMat);
+  group.add(lines);
+
+  let targetRotX = 0, targetRotY = 0;
+  window.addEventListener('mousemove', (e) => {
+    const mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+    const mouseY = (e.clientY / window.innerHeight) * 2 - 1;
+    targetRotY = mouseX * 0.15;
+    targetRotX = mouseY * 0.1;
+  });
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  const clock = new THREE.Clock();
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+
+    const posAttr = geometry.attributes.position;
+    for (let i=0; i<COUNT; i++) {
+      posAttr.array[i*3+1] += Math.sin(t*0.4 + phases[i]) * 0.004;
+    }
+    posAttr.needsUpdate = true;
+
+    group.rotation.y += (targetRotY*0.3 - group.rotation.y) * 0.02 + 0.0006;
+    group.rotation.x += (targetRotX*0.3 - group.rotation.x) * 0.02;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+}
+
+/* =========================================================================
+   INIT
+========================================================================= */
+autoLoad();
+initBackground();
+$('footRight').textContent = 'ready';
+</script>
+</body>
+</html>
