@@ -12,6 +12,8 @@ An interactive, AI-powered conversation analysis platform that extracts historic
 
 ![Dashboard Screenshot](screenshot-demo.png)
 
+> 💡 **Dataset Information:** The analytics and network logs shown in this demo were generated from a server running [ai-groupchat](https://github.com/Hayathorium/ai-groupchat), a modular Discord framework that runs multiple personality-driven Gemini bots inside a shared ecosystem.
+
 ---
 
 ## 🛠️ Setup and Installation
